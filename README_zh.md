@@ -1,17 +1,39 @@
 # Octopus to Magpie Connect
 
-独立、本地、尚未发布的社区插件 `octopus-to-magpie-connect`。[English](README.md)。连接器直接运行在 **Magpie 已有的 Bun 插件宿主**，无需另启 Go Connector、companion、守护进程或服务；不生成子进程、不退出或终止 Magpie、不修改 Magpie 源码。
+社区插件 `octopus-to-magpie-connect`(Magpie 页面插件)。[English](README.md)。连接器直接运行在 **Magpie 已有的 Bun 插件宿主**，无需另启 Go Connector、companion、守护进程或服务；不生成子进程、不退出或终止 Magpie、不修改 Magpie 源码。
 
-## 安装本地目录
+## 它登录什么、凭据存在哪里
 
-此目录的固定依赖需要一次 `npm install`（当前工作区已经准备好），无构建步骤。用户自行明确执行：
+本插件连接两个都属于你的东西:
+
+1. **Octopus 云端** —— 用在 Octopus 站点(本地节点)创建的**节点令牌**。只向你填写的 `wss://.../node/v1/connect` 地址建立一条出站 TLS WebSocket;没有账号密码,也没有 OAuth 流程。
+2. **本机 Magpie 网关** —— 用你在 Magpie 里创建的 **API 密钥**。连接器只访问 `http://127.0.0.1:<端口>`(默认 3425),即使是 loopback 也必须提供密钥。
+
+**凭据存放位置(由你选择,插件绝不自动发现):**
+
+- 插件页面填写 → 明文保存在本机 Magpie 的 `plugins.json`。
+- 环境变量 `OCTOPUS_NODE_TOKEN` / `OCTOPUS_MAGPIE_KEY` / `OCTOPUS_MAGPIE_URL` → 插件不落盘。
+- 用 `OCTOPUS_MAGPIE_PRIVATE_CONFIG` 指向的外部私有 JSON 文件 → 位置由你决定,请用操作系统权限保护。
+
+节点令牌只发往你指定的 Octopus 地址,Magpie 密钥只发往本机 loopback 网关,此外不发送任何凭据。
+
+## 有哪些模型
+
+没有固定模型清单。你逐条填写希望该 Octopus 节点对外提供的确切模型 ID(每条一个标签,不支持通配符)——通常就是你 Octopus Coding Plan 里包含的模型。只有在允许列表中的 ID 才会提供给 Magpie;页面上的"测试连接"只验证隧道、密钥和允许列表,不发送推理请求。
+
+## 安装
+
+发布到 npm 后,在 Magpie 中:
 
 ```sh
+magpie plugin add octopus-to-magpie-connect
+# 或按版本 / 从 git / 从本地文件夹:
+magpie plugin add octopus-to-magpie-connect@0.1.0
+magpie plugin add lingyuins/octopus-to-magpie-connect
 magpie plugin add D:/CodeWorkspace/octopus-to-magpie-connect
 ```
 
-这是原地加载的本地目录，不是已发布的 npm 包；本项目不会代为真实安装或启用。若从旧页面插件迁移，请停用/移除旧页面插件，不要继续为同一节点运行旧的独立 Connector。
-
+无构建步骤;本项目不会代为真实安装或启用。若从旧页面插件迁移,请停用/移除旧页面插件,不要继续为同一节点运行旧的独立 Connector。
 ## 私密信息配置
 
 在云端 Octopus 创建节点并取得节点令牌；自行取得 Magpie API 密钥。凭据可通过两种方式提供，本插件**不自动读取 auth 文件、不发现凭据**。

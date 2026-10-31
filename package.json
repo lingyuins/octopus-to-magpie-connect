@@ -1,13 +1,24 @@
 {
   "name": "octopus-to-magpie-connect",
   "version": "0.1.0",
-  "private": true,
-  "description": "In-host Magpie to Octopus connector with a private configuration page",
+  "description": "Magpie page plugin: connect a local Magpie gateway to an Octopus cloud node so it can serve Octopus Coding Plan models.",
   "type": "module",
   "main": "index.mjs",
   "scripts": {
     "test": "node --test tests/*.test.mjs"
   },
+  "files": [
+    "index.mjs",
+    "src/",
+    "page/"
+  ],
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "octopus",
+    "magpie-plugin"
+  ],
+  "license": "MIT",
   "dependencies": {
     "ws": "8.22.0"
   },

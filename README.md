@@ -1,16 +1,39 @@
 # Octopus to Magpie Connect
 
-Private, unpublished community plugin `octopus-to-magpie-connect`. The connector runs **inside Magpie's existing Bun plugin host**. It does not start a separate Go Connector, companion, daemon, service or child process, and never exits/kills Magpie. No changes to Magpie are required. [中文说明](README_zh.md).
+Community plugin `octopus-to-magpie-connect` (a Magpie page plugin). The connector runs **inside Magpie's existing Bun plugin host**. It does not start a separate Go Connector, companion, daemon, service or child process, and never exits/kills Magpie. No changes to Magpie are required. [中文说明](README_zh.md).
 
-## Install the local source
+## What it logs into and where credentials live
 
-Install this source directory's pinned dependency once with `npm install` (already prepared in this workspace), then explicitly add the absolute folder:
+This plugin connects **two** things you own:
+
+1. **The Octopus cloud** — with a **node token** from a node you create on the Octopus site (Local Nodes). It opens one outgoing TLS WebSocket to your `wss://.../node/v1/connect` endpoint; there is no account password and no OAuth flow.
+2. **Your local Magpie gateway** — with a **Magpie API key** you create in Magpie. The connector only calls `http://127.0.0.1:<port>` (default 3425); the key is required even on loopback.
+
+**Where credentials are stored (your choice, never auto-discovered):**
+
+- Plugin page fields → plain text in Magpie's local `plugins.json` on this machine.
+- Environment variables `OCTOPUS_NODE_TOKEN` / `OCTOPUS_MAGPIE_KEY` / `OCTOPUS_MAGPIE_URL` → nowhere on disk from this plugin.
+- An external private JSON file you point `OCTOPUS_MAGPIE_PRIVATE_CONFIG` at → stays wherever you put it; protect it with OS permissions.
+
+Nothing is sent anywhere except the node token to your chosen Octopus endpoint and the Magpie key to your own loopback gateway.
+
+## Which models
+
+There is no fixed model list. You type the exact model IDs your Octopus node should expose (one per chip, no wildcards) — typically the models included in your Octopus Coding Plan. Only IDs on this allowlist are served to Magpie, and the page's Test connection verifies the tunnel, key and allowlist without running inference.
+
+## Install
+
+From npm (once published), inside Magpie:
 
 ```sh
+magpie plugin add octopus-to-magpie-connect
+# or pin a version / install from git / from a folder:
+magpie plugin add octopus-to-magpie-connect@0.1.0
+magpie plugin add lingyuins/octopus-to-magpie-connect
 magpie plugin add D:/CodeWorkspace/octopus-to-magpie-connect
 ```
 
-This is a local folder, not a published npm package. Nothing in this repository automatically installs/enables the plugin. No build step is needed. Disable/remove the old page-only connector plugin if migrating; do not keep a separately running old Connector for the same node.
+No build step is needed. Nothing in this package automatically installs/enables the plugin. Disable/remove the old page-only connector plugin if migrating; do not keep a separately running old Connector for the same node.
 
 ## Private configuration
 
