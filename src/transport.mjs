@@ -127,13 +127,45 @@ function localRequest(config, agent, meta, body, signal) {
       port: local.port || 80, path: meta.path, method: meta.method,
       agent, headers, signal, maxHeaderSize: LIMITS.metadata,
       insecureHTTPParser: false,
-    }, (response) => {
+    });
+    let settled = false;
+    const settle = (error, response) => {
+      if (settled) return;
+      settled = true;
+      signal.removeEventListener('abort', onAbort);
+      request.removeListener('response', onResponse);
+      request.removeListener('upgrade', onUpgrade);
+      if (error) reject(error);
+      else resolve(response);
+    };
+    const onResponse = (response) => {
       // Keep a listener until destruction even if cancellation follows headers.
       response.on('error', () => {});
-      resolve(response);
+      settle(null, response);
+    };
+    const onError = () => settle(diagnosticError('local_unavailable'));
+    const onAbort = () => {
+      request.destroy();
+      settle(stoppedError());
+    };
+    const onUpgrade = (response, socket) => {
+      // An upgraded socket no longer belongs to the HTTP agent or its signal.
+      socket.destroy();
+      response.destroy();
+      request.destroy();
+      settle(localError());
+    };
+    request.on('response', onResponse);
+    request.on('upgrade', onUpgrade);
+    // Retain the error guard after settlement: destroy/abort may emit it later.
+    request.on('error', onError);
+    request.once('close', () => {
+      settle(diagnosticError('local_unavailable'));
+      request.removeListener('error', onError);
     });
-    request.on('error', () => reject(diagnosticError('local_unavailable')));
-    request.end(body);
+    signal.addEventListener('abort', onAbort, { once: true });
+    if (signal.aborted) onAbort();
+    else request.end(body);
   });
 }
 
@@ -179,7 +211,8 @@ async function execute(session, id, pending) {
     if (meta.method === 'GET' && response.statusCode !== 200) {
       throw diagnosticError([401, 403].includes(response.statusCode) ? 'local_authentication' : 'local_http');
     }
-    if (response.statusCode < 200 || response.statusCode >= 300 && response.statusCode <= 399) throw localError();
+    if (!Number.isInteger(response.statusCode) || response.statusCode < 200 || response.statusCode > 599 ||
+        response.statusCode >= 300 && response.statusCode <= 399) throw localError();
     let headers = responseHeaders(response);
     let modelBody;
     if (meta.method === 'GET') {

@@ -124,6 +124,40 @@
     return { ok: true, reason: null, models: list };
   }
 
+  const MODEL_IMPORT_MAX_BYTES = 4 * 1024 * 1024;
+
+  // Import is atomic: validate every exact ID before returning a new draft.
+  // JSON-looking input must parse as a models response, never as literal IDs.
+  function importModels(models, input) {
+    const list = Array.isArray(models) ? [...models] : [];
+    const fail = (reason) => ({ ok: false, reason, models: list, added: 0, skipped: 0 });
+    if (typeof input !== "string" || input === "") return fail("empty");
+    if (input.length > MODEL_IMPORT_MAX_BYTES || new TextEncoder().encode(input).length > MODEL_IMPORT_MAX_BYTES) return fail("payload");
+    let ids;
+    if (/^\s*[\[{]/.test(input)) {
+      let body;
+      try { body = JSON.parse(input); } catch { return fail("json"); }
+      if (!record(body) || !Array.isArray(body.data)) return fail("json");
+      ids = body.data.map((entry) => record(entry) ? entry.id : undefined);
+    } else {
+      ids = input.split(/\r?\n/);
+      while (ids.length && ids[ids.length - 1] === "") ids.pop();
+    }
+    if (ids.length === 0) return fail("empty");
+    const seen = new Set(list);
+    const next = [...list];
+    let skipped = 0;
+    for (const id of ids) {
+      const reason = modelError(id);
+      if (reason) return fail(reason);
+      if (seen.has(id)) { skipped += 1; continue; }
+      if (next.length >= 1024) return fail("toomany");
+      seen.add(id);
+      next.push(id);
+    }
+    return { ok: true, reason: null, models: next, added: next.length - list.length, skipped };
+  }
+
   // Remove one exact ID (a chip click). Unknown IDs leave the list untouched.
   function removeModel(models, id) {
     const list = (Array.isArray(models) ? models : []).filter((model) => model !== id);
@@ -207,5 +241,5 @@
     });
   }
 
-  return Object.freeze({ DEFAULT_OPTIONS, SECRET_PLACEHOLDER, validateOptions, inspectStoredOptions, optionsFromForm, validCloudURL, validModels, validSecret, validMagpieURL, magpiePort, validPort, modelError, addModel, removeModel, mergeSecrets, maskSecrets });
+  return Object.freeze({ DEFAULT_OPTIONS, SECRET_PLACEHOLDER, validateOptions, inspectStoredOptions, optionsFromForm, validCloudURL, validModels, validSecret, validMagpieURL, magpiePort, validPort, modelError, addModel, importModels, MODEL_IMPORT_MAX_BYTES, removeModel, mergeSecrets, maskSecrets });
 });

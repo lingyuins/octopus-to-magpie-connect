@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, rm, realpath, open, rename } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, rm, realpath, open, rename, symlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -25,6 +25,175 @@ test('matches own canonical absolute directory, never similar names or relative 
   assert.equal((await readControl(f.dir, { root: f.root, spec: 'octopus-to-magpie-connect' })).options.connect, true);
   await f.put([{ spec: f.root, options: configured }, { spec: await realpath(f.root), options: configured }]);
   await assert.rejects(readControl(f.dir, { root: f.root }));
+});
+
+async function installedFixture(t, name = 'octopus-to-magpie-connect') {
+  const f = await fixture(t);
+  const root = join(f.dir, 'plugins', 'node_modules', ...name.split('/'));
+  await mkdir(root, { recursive: true });
+  await writeFile(join(root, 'package.json'), JSON.stringify({ name, version: '0.1.0' }));
+  const mapping = (dependencies) => writeFile(join(f.dir, 'plugins', 'package.json'), JSON.stringify({ dependencies }));
+  return { ...f, root, name, mapping };
+}
+
+test('npm bare, version and tag specs resolve only to their real installed package directory', async (t) => {
+  for (const name of ['octopus-to-magpie-connect', '@fixture/octopus-to-magpie-connect']) {
+    const f = await installedFixture(t, name);
+    for (const spec of [name, `${name}@0.1.0`, `${name}@next`, `${name}@1.0.0-beta.1`]) {
+      await f.put([{ spec: 'unrelated-plugin@latest', off: true }, { spec, options: configured }]);
+      assert.equal((await readControl(f.dir, { root: f.root })).options.connect, true, spec);
+    }
+    await f.put([{ spec: name, options: configured }]);
+    // Equal package names elsewhere are not proof of this installation.
+    const elsewhere = join(f.dir, 'elsewhere');
+    await mkdir(elsewhere);
+    await writeFile(join(elsewhere, 'package.json'), JSON.stringify({ name }));
+    await assert.rejects(readControl(f.dir, { root: elsewhere }));
+    await writeFile(join(f.root, 'package.json'), JSON.stringify({ name: 'wrong-package' }));
+    await assert.rejects(readControl(f.dir, { root: f.root }));
+  }
+});
+
+test('npm rejects path-like and malformed specs before extracting an installed name', async (t) => {
+  const f = await installedFixture(t);
+  for (const spec of [
+    `./${f.name}`, `../${f.name}`, `plugins/node_modules/${f.name}`, `file:${f.root}`,
+    `${f.name}@`, `${f.name}@@next`, `${f.name}@../plugin`, `${f.name}@file:../plugin`,
+    `${f.name}@https://example.invalid/pkg.tgz`, `${f.name}\\child`, ` ${f.name}`, `${f.name} `,
+    `${f.name}\n`, `${f.name}@next\n`, './repository#main', 'fixture/repository\n',
+    '@fixture', '@fixture/', 'Octopus-to-magpie-connect',
+  ]) {
+    await f.put([{ spec, options: configured }]);
+    await assert.rejects(readControl(f.dir, { root: f.root }), spec);
+    // An unrelated invalid spec must not become an extra self-match either.
+    await f.put([{ spec, options: configured }, { spec: f.root, options: configured }]);
+    assert.equal((await readControl(f.dir, { root: f.root })).options.connect, true, spec);
+  }
+});
+
+test('Git specs use the exact saved dependency value, not repository or package basename guesses', async (t) => {
+  const f = await installedFixture(t, '@fixture/connector');
+  const specs = [
+    'github:fixture/differently-named-repository#main', 'gitlab:fixture/repository#v1',
+    'bitbucket:fixture/repository', 'git+https://example.invalid/fixture/repository.git#ref',
+    'git+ssh://git@example.invalid/fixture/repository.git#ref', 'git+file:///fixture/repository',
+    'git://example.invalid/fixture/repository.git', 'https://github.com/fixture/repository#main',
+    'https://gitlab.com/fixture/repository', 'http://bitbucket.org/fixture/repository',
+    'fixture/repository#main',
+  ];
+  for (const spec of specs) {
+    await f.mapping({ [f.name]: spec, unrelated: 'github:fixture/other' });
+    await f.put([{ spec, options: configured }]);
+    assert.equal((await readControl(f.dir, { root: f.root })).options.connect, true, spec);
+    await f.put([{ spec: `${spec}-different`, options: configured }]);
+    await assert.rejects(readControl(f.dir, { root: f.root }), spec);
+  }
+  const spec = specs[0];
+  await f.mapping({ connector: spec });
+  await f.put([{ spec, options: configured }]);
+  await assert.rejects(readControl(f.dir, { root: f.root }));
+  await f.mapping({ [f.name]: spec });
+  const elsewhere = join(f.dir, 'same-name');
+  await mkdir(elsewhere);
+  await writeFile(join(elsewhere, 'package.json'), JSON.stringify({ name: f.name }));
+  await assert.rejects(readControl(f.dir, { root: elsewhere }));
+  await writeFile(join(f.root, 'package.json'), JSON.stringify({ name: 'wrong-package' }));
+  await assert.rejects(readControl(f.dir, { root: f.root }));
+});
+
+test('Git mapping is bounded, duplicate-free and unambiguous; invalid mappings fail closed', async (t) => {
+  const f = await installedFixture(t);
+  const spec = 'github:fixture/repository#main';
+  await f.put([{ spec, options: configured }]);
+  const path = join(f.dir, 'plugins', 'package.json');
+  await assert.rejects(readControl(f.dir, { root: f.root }));
+  for (const text of [
+    '{', 'null', '[]', '{}', '{"dependencies":[]}',
+    JSON.stringify({ dependencies: { [f.name]: spec, other: spec } }),
+    JSON.stringify({ dependencies: { '../escape': spec } }),
+    JSON.stringify({ dependencies: { [f.name]: 123 } }),
+    `{"dependencies":{"${f.name}":"${spec}","${f.name}":"${spec}"}}`,
+    `{"dependencies":{"${f.name}":"${spec}"},"dependencies":{}}`,
+    JSON.stringify({ dependencies: { [f.name]: spec }, padding: 'x'.repeat((2 << 20) + 1) }),
+  ]) {
+    await writeFile(path, text);
+    await assert.rejects(readControl(f.dir, { root: f.root }));
+  }
+  await f.mapping({ [f.name]: spec });
+  assert.equal((await readControl(f.dir, { root: f.root })).options.connect, true);
+});
+
+test('installed package manifest is bounded, duplicate-free and must identify the exact package', async (t) => {
+  const f = await installedFixture(t);
+  await f.put([{ spec: f.name, options: configured }]);
+  const path = join(f.root, 'package.json');
+  for (const text of [
+    '{', 'null', '[]', '{}', '{"name":123}',
+    `{"name":"wrong-package","name":"${f.name}"}`,
+    JSON.stringify({ name: f.name, padding: 'x'.repeat((2 << 20) + 1) }),
+  ]) {
+    await writeFile(path, text);
+    await assert.rejects(readControl(f.dir, { root: f.root }));
+  }
+  await writeFile(path, JSON.stringify({ name: f.name }));
+  assert.equal((await readControl(f.dir, { root: f.root })).options.connect, true);
+});
+
+test('all default install forms require a unique entry, including cross-form duplicates', async (t) => {
+  const f = await installedFixture(t);
+  const git = 'github:fixture/repository#main';
+  await f.mapping({ [f.name]: git });
+  for (const specs of [[f.name, f.name], [f.name, `${f.name}@next`], [f.name, f.root], [git, git], [git, f.name]]) {
+    await f.put(specs.map((spec) => ({ spec, options: configured })));
+    await assert.rejects(readControl(f.dir, { root: f.root }));
+  }
+});
+
+test('npm and Git installed directory links must resolve to the canonical root', async (t) => {
+  const f = await fixture(t);
+  const name = '@fixture/linked-connector';
+  await writeFile(join(f.root, 'package.json'), JSON.stringify({ name }));
+  const modules = join(f.dir, 'plugins', 'node_modules', '@fixture');
+  await mkdir(modules, { recursive: true });
+  const target = join(modules, 'linked-connector');
+  await symlink(f.root, target, process.platform === 'win32' ? 'junction' : 'dir');
+  const git = 'github:fixture/link#ref';
+  await writeFile(join(f.dir, 'plugins', 'package.json'), JSON.stringify({ dependencies: { [name]: git } }));
+  for (const spec of [`${name}@next`, git, target]) {
+    await f.put([{ spec, options: configured }]);
+    assert.equal((await readControl(f.dir, { root: f.root })).options.connect, true);
+  }
+  const different = join(f.dir, 'different');
+  await mkdir(different);
+  await writeFile(join(different, 'package.json'), JSON.stringify({ name }));
+  await rm(target);
+  await symlink(different, target, process.platform === 'win32' ? 'junction' : 'dir');
+  for (const spec of [name, git]) {
+    await f.put([{ spec, options: configured }]);
+    await assert.rejects(readControl(f.dir, { root: f.root }));
+  }
+});
+
+test('explicit spec remains a full-equality override and absolute directories need no package metadata', async (t) => {
+  const f = await installedFixture(t);
+  const git = 'github:fixture/repository#main';
+  await f.mapping({ [f.name]: git });
+  await f.put([{ spec: f.name, options: configured }, { spec: `${f.name}@next`, options: { ...configured, connect: false } }]);
+  assert.equal((await readControl(f.dir, { root: f.root, spec: f.name })).options.connect, true);
+  assert.equal((await readControl(f.dir, { root: f.root, spec: `${f.name}@next` })).options.connect, false);
+  for (const spec of ['', null, `${f.name}@other`, f.name.toUpperCase()]) {
+    await assert.rejects(readControl(f.dir, { root: f.root, spec }));
+  }
+  // Explicit selection does not depend on automatic resolution or its metadata.
+  await writeFile(join(f.dir, 'plugins', 'package.json'), '{');
+  await writeFile(join(f.root, 'package.json'), '{');
+  await f.put([{ spec: git, options: configured }, { spec: f.root, options: { ...configured, connect: false } }]);
+  assert.equal((await readControl(f.dir, { root: f.root, spec: git })).options.connect, true);
+  assert.equal((await readControl(f.dir, { root: f.root, spec: f.root })).options.connect, false);
+  await f.put([{ spec: f.root, options: configured }]);
+  assert.equal((await readControl(f.dir, { root: f.root })).options.connect, true);
+  await f.put([{ spec: git, options: configured }, { spec: git, options: configured }]);
+  await assert.rejects(readControl(f.dir, { root: f.root, spec: git }));
 });
 
 test('off, remove, malformed and unknown fields fail closed', async (t) => {

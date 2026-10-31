@@ -22,4 +22,6 @@ const server = http.createServer(async (req, res) => {
     res.end(body);
   } catch (e) { res.writeHead(500); res.end(String(e)); }
 });
-server.listen(49669, '127.0.0.1', () => console.log('PORT=' + server.address().port));
+const port = process.env.PORT === undefined ? 49669 : Number(process.env.PORT);
+if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error('PORT must be an integer from 0 to 65535');
+server.listen(port, '127.0.0.1', () => console.log('PORT=' + server.address().port));

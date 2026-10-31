@@ -40,7 +40,7 @@ p { margin: 8px 0 14px; overflow-wrap: anywhere; }
 fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
 label, .label { display: block; font-weight: 600; margin: 18px 0 6px; }
 input, textarea { width: 100%; padding: 10px 12px; border: 1px solid var(--magpie-border, #8a94a5); border-radius: 7px; color: inherit; background: var(--magpie-bg, #f6f8fb); font: inherit; }
-input:focus-visible, button:focus-visible { outline: 2px solid var(--magpie-accent, #4675dd); outline-offset: 2px; }
+input:focus-visible, textarea:focus-visible, button:focus-visible { outline: 2px solid var(--magpie-accent, #4675dd); outline-offset: 2px; }
 .columns { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
 #node-token, #magpie-key, #magpie-port { font-family: ui-monospace, monospace; }
 input[aria-invalid="true"] { border-color: #c0392b; }
@@ -60,6 +60,16 @@ input[aria-invalid="true"] { border-color: #c0392b; }
 .add-row button { flex: none; }
 #chips-empty { margin: 4px 0 8px; }
 .field-error { color: #c0392b; opacity: 1; font-weight: 600; }
+
+/* Optional paste-only import */
+.model-import { border-top: 1px solid var(--magpie-border, #8a94a5); padding-top: 10px; margin-top: 12px; }
+.model-import > summary { cursor: pointer; font-size: 13.5px; font-weight: 600; }
+.model-import label { font-size: 13px; margin-top: 10px; }
+.model-import .hint { margin: 8px 0; }
+#model-import-input, .import-command { font: 12px/1.5 ui-monospace, monospace; }
+#model-import-input { resize: vertical; min-height: 90px; }
+#model-import-input[aria-invalid="true"] { border-color: #c0392b; }
+.import-command { white-space: pre-wrap; overflow-wrap: anywhere; margin: 8px 0; resize: none; }
 
 /* Actions & feedback */
 .actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 20px; }

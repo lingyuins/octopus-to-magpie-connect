@@ -100,6 +100,55 @@ test('model allowlist is exact, unique, bounded; no silent trimming or wildcard 
   assert.equal(options.optionsFromForm({ ...form, models: 'Model\n' }).ok, false);
 });
 
+test('bulk import accepts exact lines and JSON, skips duplicates and preserves order', () => {
+  const lines = options.importModels(['existing'], 'existing\r\nCase/ID\r\nCase/ID\r\nliteral,*\r\nmodel\n\n');
+  assert.deepEqual(lines, { ok: true, reason: null, models: ['existing', 'Case/ID', 'literal,*', 'model'], added: 3, skipped: 2 });
+  const json = options.importModels(['existing'], JSON.stringify({ data: [{ id: 'existing' }, { id: '<img src=x onerror=alert(1)>' }, { id: '*' }, { id: '*' }] }));
+  assert.deepEqual(json.models, ['existing', '<img src=x onerror=alert(1)>', '*']);
+  assert.equal(json.added, 2);
+  assert.equal(json.skipped, 2);
+  assert.deepEqual(options.importModels(['a'], 'a\na').models, ['a']);
+  assert.equal(options.importModels([], 'x'.repeat(512)).ok, true);
+});
+
+test('bulk import rejects every invalid item and malformed JSON atomically', () => {
+  const draft = ['original'];
+  for (const [input, reason] of [
+    ['', 'empty'], ['\r\n\n', 'empty'], ['good\n\nbad', 'empty'], [' good', 'space'], ['good ', 'space'],
+    ['good\nbad\tID', 'control'], ['good\nbad\0ID', 'control'], ['good\nbad\rID', 'control'], ['good\nbad\x7fID', 'control'],
+    ['中'.repeat(171), 'toolong'], ['x'.repeat(513), 'toolong'],
+    ['{bad json', 'json'], ['  {"data":[{"id":"valid"}],}', 'json'], ['["valid"]', 'json'],
+    ['{"data":null}', 'json'], ['{"models":["id"]}', 'json'], ['{"data":[]}', 'empty'],
+    ['{"data":[{"id":"good"},{}]}', 'empty'], ['{"data":[{"id":"good"},{"id":1}]}', 'empty'],
+    ['{"data":[{"id":"good"},{"id":" bad"}]}', 'space'],
+    ['{"data":[{"id":"good"},{"id":"bad\\nID"}]}', 'control'],
+  ]) {
+    const result = options.importModels(draft, input);
+    assert.equal(result.ok, false, input);
+    assert.equal(result.reason, reason, input);
+    assert.deepEqual(result.models, draft);
+    assert.equal(result.added, 0);
+  }
+  assert.deepEqual(draft, ['original']);
+});
+
+test('bulk import enforces UTF-8 payload bytes and final unique count limits', () => {
+  assert.equal(options.MODEL_IMPORT_MAX_BYTES, 4 * 1024 * 1024);
+  const limit = options.MODEL_IMPORT_MAX_BYTES;
+  const atLimit = 'a\n' + '\n'.repeat(limit - 2);
+  assert.equal(options.importModels([], atLimit).ok, true);
+  assert.equal(options.importModels([], atLimit + '\n').reason, 'payload');
+  // This string has fewer UTF-16 code units than the limit but more UTF-8 bytes.
+  assert.equal(options.importModels([], '中'.repeat(Math.floor(limit / 3) + 1)).reason, 'payload');
+  const full = Array.from({ length: 1024 }, (_, i) => `model-${i}`);
+  assert.equal(options.importModels([], full.join('\n')).ok, true);
+  assert.equal(options.importModels(full, 'model-0\nmodel-1').skipped, 2);
+  assert.equal(options.importModels(full, 'extra').reason, 'toomany');
+  const failed = options.importModels(['original'], full.join('\n'));
+  assert.equal(failed.reason, 'toomany');
+  assert.deepEqual(failed.models, ['original']);
+});
+
 test('numeric limits and minimal disabled shape are fail closed', () => {
   for (const n of [1, 32]) assert.equal(options.validateOptions(valid({ max_concurrency: n })).ok, true);
   for (const n of [1, 3600]) assert.equal(options.validateOptions(valid({ request_timeout_seconds: n })).ok, true);

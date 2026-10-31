@@ -19,7 +19,36 @@ Nothing is sent anywhere except the node token to your chosen Octopus endpoint a
 
 ## Which models
 
-There is no fixed model list. You type the exact model IDs your Octopus node should expose (one per chip, no wildcards) — typically the models included in your Octopus Coding Plan. Only IDs on this allowlist are served to Magpie, and the page's Test connection verifies the tunnel, key and allowlist without running inference.
+There is no fixed model list. Choose the exact model IDs your Octopus node should expose (one per chip, no wildcards), either by adding them individually or importing a list. Only IDs on this allowlist are forwarded to Magpie. The cloud Octopus page's Test connection verifies the tunnel, key and allowlist without running inference.
+
+### Get the gateway's models
+
+On the computer running Magpie, this PowerShell command prints the gateway's published model IDs, one per line:
+
+```powershell
+(Invoke-WebRequest -UseBasicParsing 'http://127.0.0.1:3425/v1/models?format=text').Content
+```
+
+Use your actual gateway port instead of `3425`. The current Magpie gateway permits this read-only directory request from loopback without a key; the connector itself still requires a Magpie API key. `magpie models` is also available for inspecting the model catalog in a terminal.
+
+To list what the connector's specific key can use, supply that key in an Authorization header. This example prompts without putting the key in a URL or command history, and uses the connector's User-Agent so per-agent visibility also matches:
+
+```powershell
+$key = Read-Host 'Magpie API key' -AsSecureString
+try {
+  (Invoke-WebRequest -UseBasicParsing 'http://127.0.0.1:3425/v1/models?format=text' `
+    -UserAgent 'octopus-ly-connector:v0.1.0' `
+    -Headers @{ Authorization = 'Bearer ' + [System.Net.NetworkCredential]::new('', $key).Password }).Content
+} finally {
+  Remove-Variable key -ErrorAction SilentlyContinue
+}
+```
+
+The result is the gateway's published, currently visible catalog, not every model an upstream vendor might offer. Enabled providers, hidden models, per-agent settings and key restrictions can change the list. A directory entry does not prove a model request will succeed or be free.
+
+Open **Import model list** on the plugin page. Its command preview follows the port entered in the form (empty means `3425`); **Copy command** copies it without saving preferences or including credentials. If the browser refuses clipboard access, select the read-only command and copy it manually. Run it in PowerShell, then paste the output into the import box. The JSON response from `/v1/models` (`{"data":[{"id":"provider/model"}]}`) is accepted too. Imports are bounded to 4 MiB and the resulting allowlist to 1024 unique IDs. Duplicates are skipped; any invalid ID or limit violation leaves the draft unchanged. Review/remove the chips, then explicitly save and confirm. Importing never saves or requests a connection automatically.
+
+Magpie's plugin-page sandbox forbids direct network calls (`connect-src 'none'`), and its official bridge has no model-directory read. The page therefore imports locally rather than presenting a Fetch models button that cannot work. No extra server or relaxed sandbox is needed.
 
 ## Install
 
@@ -33,7 +62,7 @@ magpie plugin add lingyuins/octopus-to-magpie-connect
 magpie plugin add D:/CodeWorkspace/octopus-to-magpie-connect
 ```
 
-No build step is needed. Nothing in this package automatically installs/enables the plugin. Disable/remove the old page-only connector plugin if migrating; do not keep a separately running old Connector for the same node.
+No build step is needed. For a fresh local checkout, run `npm ci` in the checkout before adding its folder: Magpie loads a local folder directly, so its pinned `ws` dependency must already be installed. npm/Git package installs use Magpie's package installer. Nothing in this package automatically installs/enables the plugin. Disable/remove the old page-only connector plugin if migrating; do not keep a separately running old Connector for the same node.
 
 ## Private configuration
 
@@ -72,7 +101,7 @@ Changing environment requires restarting Magpie. Changing a private file makes t
 Open the plugin page in Magpie. It uses only the official `_magpie/bridge.js` `ready`, `theme`, `onTheme`, and own `options.get/set` APIs; it has no custom RPC, direct network calls or fake live-status API. Credentials entered on the page remain local in plugins.json.
 
 1. Enter your cloud WSS endpoint, optionally prefixed, ending `/node/v1/connect`.
-2. Add exact model IDs one at a time with the Add button (or Enter); each becomes a removable chip. Case, commas and `*` are literal; there is no wildcard expansion. Click a chip to remove that model from the allowlist.
+2. Add exact model IDs with the Add button (or Enter), or open **Import model list** and paste a gateway model list as described above. Each ID becomes a removable chip. Case, commas and `*` are literal; there is no wildcard expansion. Click a chip to remove that model from the allowlist.
 3. Save preferences and separately confirm **Request connection**. Installing or opening the page never sets `connect=true`. Chip edits and field edits reach Magpie only through a confirmed save.
 4. **Fully quit and restart Magpie after saving. Refreshing the plugin page is not enough.** Restart after changing ports, tokens, keys or models too.
 5. Check actual status on the **cloud Octopus Local Nodes page**, then click **Test connection**. This checks the tunnel, gateway, key and allowed model list without inference. The plugin page shows the saved desired state, not online status, and keeps the restart instructions visible before and after saving.
@@ -103,7 +132,7 @@ Save preserves the current desired connection state. Disconnect ignores invalid 
 
 ## Ownership and fail-closed behavior
 
-The runtime reads only `input.directory/plugins.json`. By default it matches the **unique absolute installed directory spec**, canonicalized with `fs.realpath`, to its own module directory. It never matches a fuzzy name. For a deliberately chosen package spec, explicitly set `OCTOPUS_MAGPIE_PLUGIN_SPEC` to the exact full entry spec before launching Magpie; this does not publish this package.
+The runtime reads controls from `input.directory/plugins.json`. It recognizes absolute directory specs and npm/Git installation specs only when their resolved installation target, canonicalized with `fs.realpath`, is its own module directory. Package names only select candidate paths; a matching name alone is never sufficient. Git specs are mapped through the exact dependency values in `input.directory/plugins/package.json`; this and the plugin's own package metadata are bounded JSON reads, not credential discovery or code execution. Exactly one entry must match. Normal npm/Git installations do not require an environment override. For an explicitly chosen entry, `OCTOPUS_MAGPIE_PLUGIN_SPEC` remains an exact full-spec override before launching Magpie; it does not publish this package.
 
 Off/removal/missing file/malformed or duplicate controls/invalid config/disconnect cancel the active session as soon as observed (poll interval 250 ms plus read/cancellation time). The connector joins canceled local requests and closes its WSS before releasing ownership. It never terminates the host.
 

@@ -19,7 +19,36 @@
 
 ## 有哪些模型
 
-没有固定模型清单。你逐条填写希望该 Octopus 节点对外提供的确切模型 ID(每条一个标签,不支持通配符)——通常就是你 Octopus Coding Plan 里包含的模型。只有在允许列表中的 ID 才会提供给 Magpie;页面上的"测试连接"只验证隧道、密钥和允许列表,不发送推理请求。
+没有固定模型清单。选择希望该 Octopus 节点对外提供的确切模型 ID（每条一个标签，不支持通配符），可逐条添加或批量导入。只有允许列表中的 ID 才会转发到 Magpie；云端 Octopus 页面的“测试连接”只验证隧道、密钥和允许列表，不发送推理请求。
+
+### 获取网关内的模型
+
+在运行 Magpie 的电脑上打开 PowerShell，执行以下命令，逐行输出网关公开的模型 ID：
+
+```powershell
+(Invoke-WebRequest -UseBasicParsing 'http://127.0.0.1:3425/v1/models?format=text').Content
+```
+
+端口不是 `3425` 时替换为实际端口。当前 Magpie 允许本机 loopback 不带密钥只读查询目录；连接器本身仍要求填写 Magpie API 密钥。也可以运行 `magpie models` 在终端查看模型目录。
+
+要查询连接器所用那把密钥实际允许的模型，请在 Authorization 请求头中携带该密钥。下面以隐藏输入提示读取，不把密钥写入 URL 或命令历史，并使用连接器的 User-Agent 以匹配按 agent 设置的可见性：
+
+```powershell
+$key = Read-Host 'Magpie API key' -AsSecureString
+try {
+  (Invoke-WebRequest -UseBasicParsing 'http://127.0.0.1:3425/v1/models?format=text' `
+    -UserAgent 'octopus-ly-connector:v0.1.0' `
+    -Headers @{ Authorization = 'Bearer ' + [System.Net.NetworkCredential]::new('', $key).Password }).Content
+} finally {
+  Remove-Variable key -ErrorAction SilentlyContinue
+}
+```
+
+这里的“所有模型”是网关当前公开且可见的目录，不是每个上游厂商所有可能的模型。provider 启用状态、隐藏模型、agent 可见性和密钥限制都会影响结果；出现在目录中也不保证实际调用成功或免费。
+
+在插件页展开“批量导入”，指令预览会跟随表单中填写的端口（留空为 `3425`）。点击“复制指令”即可复制，不保存偏好、不包含凭据；若浏览器拒绝剪贴板访问，可选中只读指令手动复制。在本机 PowerShell 运行后，把输出粘贴进导入框；也支持 `/v1/models` 返回的 JSON（`{"data":[{"id":"provider/model"}]}`）。输入上限 4 MiB，导入后允许列表最多 1024 个唯一 ID。重复项会跳过；任何非法 ID 或超限都会让整批不修改草稿。检查并删除不希望公开的标签，再手动保存、确认；导入不会自动保存或请求连接。
+
+Magpie 插件页面沙箱禁止直接联网（`connect-src 'none'`），官方 bridge 也没有模型目录读取接口，因此这里使用离线导入，不再提供无法工作的“获取模型”按钮。不需要另起服务器，也不放宽沙箱。
 
 ## 安装
 
@@ -33,7 +62,7 @@ magpie plugin add lingyuins/octopus-to-magpie-connect
 magpie plugin add D:/CodeWorkspace/octopus-to-magpie-connect
 ```
 
-无构建步骤;本项目不会代为真实安装或启用。若从旧页面插件迁移,请停用/移除旧页面插件,不要继续为同一节点运行旧的独立 Connector。
+无构建步骤。全新本地 checkout 请先在目录内执行 `npm ci`，再添加该文件夹：Magpie 直接加载本地目录，因此固定版本的 `ws` 依赖需要提前安装。npm/Git 包安装由 Magpie 的包安装器处理。本项目不会代为真实安装或启用。若从旧页面插件迁移，请停用/移除旧页面插件，不要继续为同一节点运行旧的独立 Connector。
 ## 私密信息配置
 
 在云端 Octopus 创建节点并取得节点令牌；自行取得 Magpie API 密钥。凭据可通过两种方式提供，本插件**不自动读取 auth 文件、不发现凭据**。
@@ -68,7 +97,7 @@ $env:OCTOPUS_MAGPIE_URL = 'http://127.0.0.1:3425'
 
 ## 页面操作与宿主生命周期
 
-在 Magpie 中打开插件页，填写以 `/node/v1/connect` 结尾的云端 WSS 地址（可带部署前缀），用"添加"按钮（或回车）逐个加入精确模型 ID——每个 ID 变成一个可移除的标签；大小写、逗号、`*` 均按字面处理，点击标签即从允许列表移除该模型。连接、断开、保存均需单独确认，初次安装/打开页面不会自动把 `connect` 设为 `true`。标签和字段的改动只有通过确认的保存才会写入 Magpie。保存偏好保留此前连接期望；断开忽略当前未保存的错误表单，使用上次合法配置保存 `connect=false`。端口留空会移除页面保存的地址覆盖；只有 `__keep__` 才沿用已有密钥，主动清空密钥字段则回退到环境变量或私有配置。
+在 Magpie 中打开插件页，填写以 `/node/v1/connect` 结尾的云端 WSS 地址（可带部署前缀），用“添加”按钮（或回车）逐个加入精确模型 ID，或展开“批量导入”粘贴上文获取的网关模型列表。每个 ID 都会成为可移除的标签；大小写、逗号、`*` 均按字面处理，点击标签即从允许列表移除该模型。连接、断开、保存均需单独确认，初次安装/打开页面不会自动把 `connect` 设为 `true`。导入、标签和字段的改动只有通过确认的保存才会写入 Magpie。保存偏好保留此前连接期望；断开忽略当前未保存的错误表单，使用上次合法配置保存 `connect=false`。端口留空会移除页面保存的地址覆盖；只有 `__keep__` 才沿用已有密钥，主动清空密钥字段则回退到环境变量或私有配置。
 
 **填写完毕后，点击“请求连接”并确认保存，然后完全退出并重新启动 Magpie；仅刷新插件页面不够。** 修改端口、令牌、密钥或模型后同样需要重启。重启后到 Octopus 的“本地节点”页面查看状态并点击“测试连接”。该测试只检查隧道、网关、密钥和允许列表内的模型，不发送推理请求。
 
@@ -100,7 +129,7 @@ $env:OCTOPUS_MAGPIE_URL = 'http://127.0.0.1:3425'
 
 ## 单实例与失败关闭
 
-只读 `input.directory/plugins.json`。默认只匹配**唯一的已安装绝对目录 spec**，通过 `fs.realpath` 与自身模块目录比较，不按模糊 name 匹配。如有明确指定的包 spec，可在启动 Magpie 前设置 `OCTOPUS_MAGPIE_PLUGIN_SPEC` 为完整精确 spec；这不表示本包已发布。
+从 `input.directory/plugins.json` 读取控制配置。绝对目录 spec 以及 npm/Git 安装 spec 都必须把实际安装目标经 `fs.realpath` 规范化后，与自身模块目录精确比较；包名只用于定位候选路径，名称相同本身不能证明身份。Git spec 通过 `input.directory/plugins/package.json` 的完整依赖值精确映射；该文件及插件自己的包元数据均为有界 JSON 读取，不涉及凭据发现或执行代码。必须且只能匹配一个条目。正常 npm/Git 安装不需要额外环境变量；如需显式选择条目，仍可在启动 Magpie 前设置 `OCTOPUS_MAGPIE_PLUGIN_SPEC` 为完整精确 spec。这不表示本包已发布。
 
 禁用/移除、文件丢失、读取失败、重复字段/重复匹配、非法配置或断开期望，均在观察到时立即取消当前会话（轮询 250ms，加读取与取消耗时）。先关闭 WSS 并等待本地请求取消完成，再释放所有权，不终止宿主。
 

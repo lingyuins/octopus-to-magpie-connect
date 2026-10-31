@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
+import net from 'node:net';
 import { once } from 'node:events';
 import { setTimeout as delay } from 'node:timers/promises';
 import { createRequire } from 'node:module';
@@ -11,9 +12,18 @@ const { WebSocketServer } = await import(pathToFileURL(join(dirname(require.reso
 import { connectOnce, USER_AGENT } from '../src/transport.mjs';
 import { FRAME, LIMITS, PROTOCOL, encodeFrame, decodeFrame, jsonFrame } from '../src/protocol.mjs';
 
-async function fixture(t, handler, extra = {}) {
+async function bounded(promise, label, milliseconds = 1500) {
+  let timer;
+  try {
+    return await Promise.race([promise, new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`test timeout: ${label}`)), milliseconds);
+    })]);
+  } finally { clearTimeout(timer); }
+}
+
+async function fixture(t, handler, extra = {}, raw = false) {
   const sockets = new Set();
-  const local = http.createServer(handler);
+  const local = raw ? net.createServer(handler) : http.createServer(handler);
   local.on('connection', (socket) => { sockets.add(socket); socket.on('close', () => sockets.delete(socket)); });
   local.listen(0, '127.0.0.1');
   await once(local, 'listening');
@@ -33,9 +43,13 @@ async function fixture(t, handler, extra = {}) {
   t.after(async () => {
     controller.abort();
     ws.terminate();
-    await outcome;
-    for (const socket of sockets) socket.destroy();
-    await Promise.all([new Promise((resolve) => cloud.close(resolve)), new Promise((resolve) => local.close(resolve))]);
+    try {
+      await bounded(outcome, 'connector cleanup');
+    } finally {
+      for (const socket of sockets) socket.destroy();
+      await bounded(Promise.all([new Promise((resolve) => cloud.close(resolve)),
+        new Promise((resolve) => local.close(resolve))]), 'server cleanup');
+    }
   });
   async function frame(kind, id = 1n) {
     const deadline = Date.now() + 5000;
@@ -154,7 +168,7 @@ test('model probes classify authentication failures without disclosing their bod
 });
 
 test('model probes classify unexpected HTTP and malformed models without disclosing local content', async (t) => {
-  for (const status of [403, 404, 302, 500]) {
+  for (const status of [403, 404, 302, 500, 600, 999]) {
     await t.test(String(status), async (t) => {
       const f = await fixture(t, (_req, res) => { res.writeHead(status); res.end('local-secret'); });
       f.request(1n, { method: 'GET', path: '/v1/models', header: {}, body: '' });
@@ -208,6 +222,184 @@ test('upstream redirect is not followed and error response body is never disclos
   assert.equal(calls, 1);
   assert.equal(f.frames.some((frame) => frame.kind === FRAME.RESPONSE_DATA), false);
 });
+
+test('local 101 rejects only its request, closes the upgraded socket and releases its slot', async (t) => {
+  let calls = 0;
+  let healthy;
+  let upgradedClosed;
+  const closure = new Promise((resolve) => { upgradedClosed = resolve; });
+  const f = await fixture(t, (req, res) => {
+    req.resume();
+    calls++;
+    if (calls === 1) {
+      req.socket.on('close', upgradedClosed);
+      res.writeHead(101, { Connection: 'Upgrade', Upgrade: 'private-protocol' });
+      res.flushHeaders();
+      res.socket.write('local-secret upgraded bytes');
+    } else if (calls === 2) {
+      healthy = res;
+      res.writeHead(200);
+      res.write('healthy concurrent stream');
+    } else res.end('healthy next request');
+  }, { maxConcurrency: 2 });
+  f.request(1n);
+  f.request(2n);
+  await bounded(f.frame(FRAME.RESPONSE_DATA, 2n), 'concurrent response');
+  assert.equal((await bounded(f.frame(FRAME.ERROR, 1n), '101 rejection')).data.length, 0);
+  await bounded(closure, 'upgraded socket destruction');
+  assert.deepEqual(f.frames.filter((frame) => frame.id === 1n).map((frame) => frame.kind), [FRAME.ERROR]);
+  f.request(3n);
+  await bounded(f.frame(FRAME.COMPLETE, 3n), 'released upgrade slot');
+  healthy.end();
+  await bounded(f.frame(FRAME.COMPLETE, 2n), 'concurrent completion');
+  assert.equal(bodyFor(f, 2n), 'healthy concurrent stream');
+  assert.equal(bodyFor(f, 3n), 'healthy next request');
+  assert.equal(calls, 3);
+  assert.deepEqual(f.states, ['connecting', 'connected']);
+});
+
+test('session stop after local 101 joins workers promptly without replay', async (t) => {
+  let sent;
+  let calls = 0;
+  const upgrade = new Promise((resolve) => { sent = resolve; });
+  const f = await fixture(t, (req, res) => {
+    calls++;
+    req.resume();
+    res.writeHead(101, { Connection: 'Upgrade', Upgrade: 'private-protocol' });
+    res.flushHeaders();
+    sent();
+  });
+  f.request(1n);
+  await bounded(upgrade, '101 sent');
+  // Let the client consume the upgrade before stopping the session.
+  await delay(50);
+  f.controller.abort();
+  assert.equal(await bounded(f.outcome, 'stop after upgrade'), null);
+  assert.deepEqual(f.states, ['connecting', 'connected', 'stopped']);
+  assert.equal(calls, 1);
+});
+
+test('local 101 cannot strand a worker past its deadline or keep the request slot', async (t) => {
+  let calls = 0;
+  let closed;
+  const closure = new Promise((resolve) => { closed = resolve; });
+  const f = await fixture(t, (req, res) => {
+    req.resume();
+    calls++;
+    if (calls === 1) {
+      req.socket.on('close', closed);
+      res.writeHead(101, { Connection: 'Upgrade', Upgrade: 'private-protocol' });
+      res.flushHeaders();
+    } else res.end('next');
+  }, { maxConcurrency: 1 });
+  f.request(1n, { deadline: Date.now() + 250 });
+  assert.equal((await bounded(f.frame(FRAME.ERROR), 'upgrade before deadline')).data.length, 0);
+  await bounded(closure, 'deadline upgrade socket destruction');
+  await delay(300);
+  assert.deepEqual(f.frames.filter((frame) => frame.id === 1n).map((frame) => frame.kind), [FRAME.ERROR]);
+  f.request(2n);
+  await bounded(f.frame(FRAME.COMPLETE, 2n), 'slot after upgrade deadline');
+  assert.equal(bodyFor(f, 2n), 'next');
+  assert.equal(calls, 2);
+  f.controller.abort();
+  assert.equal(await bounded(f.outcome, 'stop after upgrade deadline'), null);
+});
+
+for (const action of ['cancel', 'deadline', 'stop']) {
+  test(`response-pending ${action} destroys the local socket and settles workers`, async (t) => {
+    let arrived;
+    let closed;
+    let calls = 0;
+    const arrival = new Promise((resolve) => { arrived = resolve; });
+    const closure = new Promise((resolve) => { closed = resolve; });
+    const f = await fixture(t, (req, res) => {
+      req.resume();
+      calls++;
+      if (calls === 1) {
+        req.socket.on('close', closed);
+        arrived();
+      } else res.end('next');
+    }, { maxConcurrency: 1 });
+    f.request(1n, { deadline: Date.now() + (action === 'deadline' ? 250 : 10_000) });
+    await bounded(arrival, 'local request arrival');
+    if (action === 'stop') f.controller.abort();
+    else if (action === 'cancel') f.ws.send(encodeFrame(FRAME.CANCEL, 1n));
+    if (action === 'stop') {
+      assert.equal(await bounded(f.outcome, 'stop before response'), null);
+      assert.equal(f.states.at(-1), 'stopped');
+    } else {
+      assert.equal((await bounded(f.frame(FRAME.ERROR), 'pending request error')).data.toString(),
+        action === 'deadline' ? 'deadline' : '');
+      f.request(2n);
+      await bounded(f.frame(FRAME.COMPLETE, 2n), 'released pending slot');
+      assert.equal(bodyFor(f, 2n), 'next');
+    }
+    await bounded(closure, 'pending socket destruction');
+    assert.equal(calls, action === 'stop' ? 1 : 2);
+    assert.equal(f.frames.some((frame) => frame.id === 1n && frame.kind !== FRAME.ERROR), false);
+  });
+}
+
+test('raw TCP close before response settles just that request and permits new work', async (t) => {
+  let calls = 0;
+  const f = await fixture(t, (socket) => {
+    socket.once('data', () => {
+      calls++;
+      if (calls === 1) socket.end();
+      else socket.end('HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\nnext');
+    });
+  }, { maxConcurrency: 1 }, true);
+  f.request(1n);
+  assert.equal((await bounded(f.frame(FRAME.ERROR), 'response-premature close')).data.length, 0);
+  assert.deepEqual(f.frames.filter((frame) => frame.id === 1n).map((frame) => frame.kind), [FRAME.ERROR]);
+  f.request(2n);
+  await bounded(f.frame(FRAME.COMPLETE, 2n), 'new request after premature close');
+  assert.equal(bodyFor(f, 2n), 'next');
+  assert.equal(calls, 2);
+  assert.deepEqual(f.states, ['connecting', 'connected']);
+});
+
+for (const status of [600, 999, 200, 299, 300, 302, 399, 400, 599]) {
+  test(`local HTTP ${status} stays within the response protocol and request boundary`, async (t) => {
+    let calls = 0;
+    let concurrent;
+    const rejected = status > 599 || status >= 300 && status <= 399;
+    const f = await fixture(t, (req, res) => {
+      req.resume();
+      calls++;
+      if (calls === 1) {
+        res.writeHead(status, { Location: 'http://127.0.0.1/never-follow' });
+        res.end('local-secret status body');
+      } else if (calls === 2) {
+        concurrent = res;
+        res.write('concurrent');
+      } else res.end('next');
+    }, { maxConcurrency: 2 });
+    f.request(1n);
+    f.request(2n);
+    await bounded(f.frame(FRAME.RESPONSE_DATA, 2n), 'other concurrent request');
+    if (rejected) {
+      assert.equal((await bounded(f.frame(FRAME.ERROR), `HTTP ${status} rejection`)).data.length, 0);
+      assert.deepEqual(f.frames.filter((frame) => frame.id === 1n).map((frame) => frame.kind), [FRAME.ERROR]);
+      assert.equal(bodyFor(f), '');
+    } else {
+      await bounded(f.frame(FRAME.COMPLETE), `HTTP ${status} completion`);
+      assert.equal(JSON.parse((await f.frame(FRAME.RESPONSE)).data).status, status);
+      assert.equal(bodyFor(f), 'local-secret status body');
+    }
+    f.request(3n);
+    await bounded(f.frame(FRAME.COMPLETE, 3n), 'new work after status response');
+    concurrent.end();
+    await bounded(f.frame(FRAME.COMPLETE, 2n), 'concurrent status completion');
+    assert.equal(calls, 3);
+    assert.equal(bodyFor(f, 3n), 'next');
+    assert.deepEqual(f.states, ['connecting', 'connected']);
+    assert.ok(f.frames.filter((frame) => frame.kind === FRAME.RESPONSE).every((frame) => {
+      const { status } = JSON.parse(frame.data);
+      return Number.isInteger(status) && status >= 200 && status <= 599;
+    }));
+  });
+}
 
 test('concurrency and pending deadlines release bounded request slots', async (t) => {
   let calls = 0;

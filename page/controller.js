@@ -5,7 +5,7 @@
 })(typeof globalThis !== "undefined" ? globalThis : this, function (options) {
   "use strict";
   function createController({ bridge, onChange = function () {}, now = () => Date.now() }) {
-    let state = { loaded: false, busy: false, saved: null, pending: null, warnings: [], errors: [], message: "loading", draft: [], draftError: null, needsRestart: false, setupVisible: false, savedAt: null };
+    let state = { loaded: false, busy: false, saved: null, pending: null, warnings: [], errors: [], message: "loading", draft: [], draftError: null, importResult: null, needsRestart: false, setupVisible: false, savedAt: null };
     let lastSet = -Infinity;
     const snapshot = () => JSON.parse(JSON.stringify(state));
     const emit = () => onChange(snapshot());
@@ -21,6 +21,7 @@
       state.errors = [];
       state.draft = [];
       state.draftError = null;
+      state.importResult = null;
       state.message = "loading";
       state.needsRestart = false;
       state.setupVisible = false;
@@ -51,6 +52,16 @@
       const result = options.addModel(state.draft, line);
       state.draft = result.models;
       state.draftError = result.reason;
+      emit();
+      return result.ok;
+    }
+
+    function importModels(input) {
+      if (!state.loaded || state.busy || state.pending) return false;
+      const result = options.importModels(state.draft, input);
+      if (result.ok) state.draft = result.models;
+      state.importResult = { ok: result.ok, reason: result.reason, added: result.added, skipped: result.skipped };
+      if (result.ok) state.draftError = null;
       emit();
       return result.ok;
     }
@@ -128,6 +139,7 @@
         state.warnings = [];
         state.draft = [...saved.value.models];
         state.draftError = null;
+        state.importResult = null;
         state.pending = null;
         state.needsRestart = pending.action !== "disconnect";
         state.setupVisible = state.needsRestart;
@@ -146,7 +158,7 @@
       }
     }
 
-    return Object.freeze({ load, request, cancel, confirm, addModel, removeModel, clearDraftError, dismissSetup, getState: snapshot });
+    return Object.freeze({ load, request, cancel, confirm, addModel, importModels, removeModel, clearDraftError, dismissSetup, getState: snapshot });
   }
   return Object.freeze({ createController });
 });

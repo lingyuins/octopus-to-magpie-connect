@@ -64,11 +64,23 @@
         <div class="add-row">
           <input id="model-input" type="text" autocomplete="off" spellcheck="false" data-i18n-ph="modelPlaceholder" placeholder="provider/exact-model-id" aria-labelledby="models-label" aria-describedby="models-help">
           <button id="model-add" type="button" data-i18n="addModel">Add</button>
-          <button id="model-fetch" type="button" data-i18n="fetchModels">Fetch models</button>
         </div>
         <p class="hint field-error" id="model-error" hidden></p>
-        <p class="hint" id="model-fetch-status" role="status" aria-live="polite" hidden></p>
         <p class="hint" id="models-help" data-i18n="modelsHelp">Exact, case-sensitive IDs, one per chip. Click a chip to remove it. Wildcards have no special meaning; commas are literal.</p>
+        <details class="model-import" id="model-import-panel">
+          <summary data-i18n="importTitle">Import model list (optional)</summary>
+          <p class="hint" data-i18n="importHelp">This page does not access the network. Copy the command for the port entered below (empty means 3425), run it in PowerShell on this machine, then paste its output. Only use 127.0.0.1; the command contains no credentials. Key-filtered queries: see the documentation.</p>
+          <label for="model-command" data-i18n="modelCommandLabel">PowerShell command</label>
+          <textarea class="import-command" id="model-command" rows="2" readonly spellcheck="false" aria-describedby="model-command-status">(Invoke-WebRequest -UseBasicParsing 'http://127.0.0.1:3425/v1/models?format=text').Content</textarea>
+          <button id="model-command-copy" type="button" data-i18n="copyCommand" disabled>Copy command</button>
+          <p class="hint" id="model-command-status" role="status" aria-live="polite" hidden></p>
+          <label for="model-import-input" data-i18n="importLabel">Model IDs (one per line), or JSON with data: [{id: …}]</label>
+          <textarea id="model-import-input" rows="4" autocomplete="off" spellcheck="false" aria-describedby="model-import-hint model-import-status" disabled></textarea>
+          <p class="hint" id="model-import-hint" data-i18n="importHint">At most 4 MiB UTF-8 and 1024 unique IDs including existing chips. Duplicates are skipped; any invalid item rejects the whole batch. IDs are never trimmed or split on commas.</p>
+          <button id="model-import" type="button" data-i18n="importButton" disabled>Import to draft</button>
+          <p class="hint" id="model-import-status" role="status" aria-live="polite" hidden></p>
+          <p class="hint" data-i18n="importVisibility">The directory depends on key, agent and provider visibility. Import only edits removable draft chips; review them and Save or Request connection, then confirm.</p>
+        </details>
       </fieldset>
     </section>
 

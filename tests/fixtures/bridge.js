@@ -4,8 +4,12 @@
   const listeners = new Set();
   let stored = {};
   let failure = null;
-  let theme = { dark: false, lang: "en", tokens: {} };
+  let theme = null;
   let lastSet = -Infinity;
+  let resolveReady;
+  let rejectReady;
+  let helloComplete = false;
+  const ready = new Promise((resolve, reject) => { resolveReady = resolve; rejectReady = reject; });
   const calls = [];
   const clone = (value) => JSON.parse(JSON.stringify(value));
   function paintTheme() {
@@ -15,7 +19,7 @@
     document.documentElement.style.setProperty("--magpie-fg", theme.dark ? "#e3e8f0" : "#202631");
   }
   window.magpie = {
-    ready: Promise.resolve(theme),
+    ready,
     get theme() { return theme; },
     onTheme(fn) { listeners.add(fn); return () => listeners.delete(fn); },
     options: {
@@ -33,26 +37,35 @@
       },
     },
   };
-  let fixtureModels = [];
-  let fixtureModelsError = null;
-  window.fetch = async (url, options) => {
-    if (fixtureModelsError === "auth") return { ok: false, status: 401, json: async () => ({}) };
-    if (fixtureModelsError) throw fixtureModelsError;
-    if (typeof url !== "string" || !url.startsWith("http://127.0.0.1:")) throw new Error("fixture fetch only allows loopback");
-    return { ok: true, status: 200, json: async () => ({ object: "list", data: fixtureModels.map((id) => ({ id, object: "model" })) }) };
-  };
-  // Test harness controls, not extra Magpie bridge calls.
+  // Test harness controls, not extra Magpie bridge calls. Hello resolves ready
+  // without firing onTheme, just like the official bridge's initial handshake.
   window.octopusFixture = {
     calls,
     seed(value) { stored = clone(value); },
     fail(value) { failure = value; },
-    setModels(list) { fixtureModels = [...list]; fixtureModelsError = null; },
-    failModels(error) { fixtureModelsError = error; },
+    hello(lang = "en", dark = false) {
+      if (helloComplete) return;
+      helloComplete = true;
+      theme = { dark, lang, tokens: {} };
+      paintTheme();
+      resolveReady(theme);
+    },
+    rejectReady() {
+      if (helloComplete) return;
+      helloComplete = true;
+      rejectReady(new Error("fixture handshake failure"));
+    },
     theme(lang, dark = false) {
       theme = { dark, lang, tokens: {} };
       paintTheme();
       for (const fn of listeners) fn(theme);
     },
   };
-  paintTheme();
+  const params = new URLSearchParams(window.location ? window.location.search : "");
+  const config = window.octopusFixtureConfig || {};
+  if (!config.manualHello && params.get("hello") !== "manual") {
+    const hello = () => window.octopusFixture.hello(config.lang || params.get("lang") || "en", Boolean(config.dark) || params.get("dark") === "1");
+    if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", hello, { once: true });
+    else Promise.resolve().then(hello);
+  }
 })();

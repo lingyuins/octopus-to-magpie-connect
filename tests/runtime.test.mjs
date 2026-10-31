@@ -140,6 +140,62 @@ test('real plugins.json and OS lease hand off to successor without overlap', asy
   assert.equal(active, 0);
 });
 
+test('real npm-form installation starts without a spec override and stops when its entry is disabled', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'octopus-runtime-npm-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const name = '@fixture/octopus-connector';
+  const root = join(directory, 'plugins', 'node_modules', ...name.split('/'));
+  await mkdir(root, { recursive: true });
+  await writeFile(join(root, 'package.json'), JSON.stringify({ name, version: '0.1.0' }));
+  const save = (off) => writeFile(join(directory, 'plugins.json'), JSON.stringify({ plugins: [{ spec: `${name}@next`, options: configured, off }] }));
+  await save(false);
+  const calls = [];
+  const states = [];
+  let active = false;
+  const runtime = startRuntime({ directory }, configured, {
+    root, env: { OCTOPUS_NODE_TOKEN: randomUUID(), OCTOPUS_MAGPIE_KEY: 'synthetic-key' },
+    pollMilliseconds: 5,
+    onState: (state) => states.push(state),
+    connect: async (config, { signal }) => {
+      calls.push(config); active = true;
+      await new Promise((resolve) => { if (signal.aborted) resolve(); else signal.addEventListener('abort', resolve, { once: true }); });
+      active = false;
+    },
+  });
+  t.after(async () => { runtime.stop(); await runtime.done; });
+  await until(() => calls.length === 1 || states.includes('control_invalid'));
+  assert.equal(calls.length, 1);
+  assert.equal(active, true);
+  await save(true);
+  await runtime.done;
+  assert.equal(active, false);
+  assert.equal(states.includes('control_invalid'), false);
+});
+
+test('runtime passes the explicit environment spec as a full-equality override', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'octopus-runtime-spec-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const root = join(directory, 'plugin');
+  await mkdir(root);
+  const spec = 'github:fixture/exact-repository#ref';
+  const save = (entries) => writeFile(join(directory, 'plugins.json'), JSON.stringify({ plugins: entries }));
+  await save([{ spec: root, off: true }, { spec, options: configured }]);
+  let calls = 0;
+  const runtime = startRuntime({ directory }, configured, {
+    root, env: { OCTOPUS_MAGPIE_PLUGIN_SPEC: spec, OCTOPUS_NODE_TOKEN: randomUUID(), OCTOPUS_MAGPIE_KEY: 'synthetic-key' },
+    pollMilliseconds: 5,
+    connect: async (_config, { signal }) => {
+      calls++;
+      await new Promise((resolve) => { if (signal.aborted) resolve(); else signal.addEventListener('abort', resolve, { once: true }); });
+    },
+  });
+  t.after(async () => { runtime.stop(); await runtime.done; });
+  await until(() => calls === 1);
+  await save([{ spec: `${spec}-different`, options: configured }]);
+  await runtime.done;
+  assert.equal(calls, 1);
+});
+
 test('exponential retry has deterministic jitter, 500ms floor and 30s cap', () => {
   assert.equal(retryDelay(0, 500, () => 0), 500);
   assert.equal(retryDelay(0, 500, () => 1), 1000);

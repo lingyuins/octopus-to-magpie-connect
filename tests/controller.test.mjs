@@ -156,6 +156,56 @@ test('save failure is unverified, stops stale writes and can reload safely', asy
   assert.equal(await f.controller.load(), true);
 });
 
+test('bulk import is one atomic draft update with no write until confirmed save/connect', async () => {
+  for (const action of ['save', 'connect']) {
+    const f = fixture();
+    assert.equal(f.controller.importModels('early'), false);
+    await f.controller.load();
+    const before = f.states.length;
+    assert.equal(f.controller.importModels('Model\r\nnew,exact\r\nnew,exact\r\n'), true);
+    assert.equal(f.states.length, before + 1);
+    assert.deepEqual(f.controller.getState().draft, ['Model', 'new,exact']);
+    assert.deepEqual(f.controller.getState().importResult, { ok: true, reason: null, added: 1, skipped: 2 });
+    assert.deepEqual(f.controller.getState().saved.models, ['Model']);
+    assert.equal(f.calls.length, 0);
+    const beforeInvalid = f.states.length;
+    assert.equal(f.controller.importModels('valid\n bad'), false);
+    assert.equal(f.states.length, beforeInvalid + 1);
+    assert.deepEqual(f.controller.getState().draft, ['Model', 'new,exact']);
+    assert.equal(f.controller.removeModel('Model'), true);
+    assert.equal(f.controller.request(action, fields), true);
+    const pendingStates = f.states.length;
+    assert.equal(f.controller.importModels('while-pending'), false);
+    assert.equal(f.states.length, pendingStates);
+    assert.equal(f.calls.length, 0);
+    assert.equal(await f.controller.confirm(), true);
+    assert.deepEqual(f.calls[0].models, ['new,exact']);
+    assert.equal(f.calls[0].connect, action === 'connect');
+  }
+});
+
+test('bulk import cannot edit during loading or saving or after failed load', async () => {
+  const f = fixture();
+  let resolveReady;
+  f.bridge.ready = new Promise((resolve) => { resolveReady = resolve; });
+  const loading = f.controller.load();
+  assert.equal(f.controller.importModels('during-load'), false);
+  resolveReady({ lang: 'en' });
+  await loading;
+  let finishSave;
+  f.bridge.options.set = (value) => new Promise((resolve) => { finishSave = () => resolve(value); });
+  f.controller.request('save', fields);
+  const saving = f.controller.confirm();
+  const before = f.states.length;
+  assert.equal(f.controller.importModels('during-save'), false);
+  assert.equal(f.states.length, before);
+  finishSave();
+  assert.equal(await saving, true);
+  f.bridge.options.get = async () => { throw new Error('fixture failure'); };
+  await f.controller.load();
+  assert.equal(f.controller.importModels('after-error'), false);
+});
+
 test('only a strict matching bridge acknowledgement updates saved preference', async () => {
   for (const reply of [{ ...configured, connect: true, node_token: 'tampered' }, { ...configured, connect: false }, null]) {
     const f = fixture();

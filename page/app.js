@@ -1,9 +1,5 @@
 (function () {
   "use strict";
-  // Keep in sync with package.json; identifies this connector to the magpie
-  // gateway (User-Agent is a forbidden header in browsers, so the page uses
-  // X-Magpie-Agent for loopback fetches).
-  const VERSION = "0.1.0";
   const messages = {
     en: {
       statusTitle: "Connection preference",
@@ -17,13 +13,21 @@
       addModel: "Add",
       modelsEmpty: "No models yet. Add at least one exact model ID below before connecting.",
       modelsHelp: "Exact, case-sensitive IDs, one per chip. Click a chip to remove it. Wildcards have no special meaning; commas are literal.",
-      fetchModels: "Fetch models",
-      fetchingModels: "Fetching models…",
-      fetchModelsNeedKey: "Enter the Magpie API key first.",
-      fetchModelsNeedValidPort: "Enter a valid Magpie port number first.",
-      fetchModelsAuth: "Magpie rejected the API key. Check the key and port.",
-      fetchModelsFailed: "Could not fetch models. Check that Magpie is running on this port.",
-      fetchedModels: "Added {count} model(s) from the Magpie gateway.",
+      importTitle: "Import model list (optional)",
+      importHelp: "This page does not access the network. Copy the command for the port entered below (empty means 3425), run it in PowerShell on this machine, then paste its output. Only use 127.0.0.1; the command contains no credentials. Key-filtered queries: see the documentation.",
+      modelCommandLabel: "PowerShell command",
+      copyCommand: "Copy command",
+      commandCopied: "Command copied. Run it in PowerShell on this machine.",
+      commandCopyFailed: "Could not copy automatically. Select the command and copy it manually.",
+      commandInvalidPort: "Enter a whole port number from 1 to 65535 below, or leave it empty for 3425.",
+      importVisibility: "The directory depends on key, agent and provider visibility. Import only edits removable draft chips; review them and Save or Request connection, then confirm.",
+      importLabel: "Model IDs (one per line), or JSON with data: [{id: …}]",
+      importHint: "At most 4 MiB UTF-8 and 1024 unique IDs including existing chips. Duplicates are skipped; any invalid item rejects the whole batch. IDs are never trimmed or split on commas.",
+      importButton: "Import to draft",
+      importedModels: "Added {added} model(s); skipped {skipped} duplicate(s). Draft only, not saved.",
+      importFailed: "Nothing imported. {reason}",
+      model_json: "Invalid JSON models response; expected an object with a data array of model IDs.",
+      model_payload: "Import input must not exceed 4 MiB UTF-8.",
       removeModel: "Remove {id}",
       concurrencyLabel: "Maximum concurrency (1–32)",
       timeoutLabel: "Request timeout in seconds (1–3600)",
@@ -94,13 +98,21 @@
       addModel: "添加",
       modelsEmpty: "还没有模型。连接前请在下方至少添加一个精确的模型 ID。",
       modelsHelp: "精确且区分大小写的 ID，每个一个标签。点击标签即可移除。通配符没有特殊含义，逗号按字面处理。",
-      fetchModels: "获取模型",
-      fetchingModels: "正在获取模型…",
-      fetchModelsNeedKey: "请先填写 Magpie API 密钥。",
-      fetchModelsNeedValidPort: "请先填写有效的 Magpie 端口号。",
-      fetchModelsAuth: "Magpie 拒绝了 API 密钥，请检查密钥和端口。",
-      fetchModelsFailed: "无法获取模型，请确认 Magpie 已在该端口运行。",
-      fetchedModels: "已从 Magpie 网关添加 {count} 个模型。",
+      importTitle: "批量导入模型（可选）",
+      importHelp: "此页面不访问网络。指令使用下方填写的端口（留空为 3425）；复制后在本机 PowerShell 运行，再粘贴输出。地址固定为 127.0.0.1，指令不含凭据。按密钥筛选的查询方式见文档。",
+      modelCommandLabel: "PowerShell 指令",
+      copyCommand: "复制指令",
+      commandCopied: "指令已复制，请在本机 PowerShell 运行。",
+      commandCopyFailed: "无法自动复制，请选中指令后手动复制。",
+      commandInvalidPort: "请在下方填写 1–65535 的整数端口；留空则使用 3425。",
+      importVisibility: "目录受密钥、代理及提供方可见性限制。导入只编辑可移除的模型标签草稿；请检查后点击保存偏好或请求连接，并确认。",
+      importLabel: "模型 ID（每行一个），或含 data: [{id: …}] 的 JSON",
+      importHint: "输入最多 4 MiB UTF-8，含现有标签最多 1024 个不同 ID。跳过重复项；任何非法项都会拒绝整批。不修剪 ID，不按逗号拆分。",
+      importButton: "导入草稿",
+      importedModels: "已添加 {added} 个模型，跳过 {skipped} 个重复项。仅为草稿，尚未保存。",
+      importFailed: "未导入任何模型。{reason}",
+      model_json: "JSON 模型响应无效；需要含模型 ID 的 data 数组对象。",
+      model_payload: "导入输入不能超过 4 MiB UTF-8。",
       removeModel: "移除 {id}",
       concurrencyLabel: "最大并发数（1–32）",
       timeoutLabel: "请求超时秒数（1–3600）",
@@ -164,9 +176,60 @@
   let language = "en";
   let current = null;
   let paintedSaved = "";
+  let copyingCommand = false;
+  let commandFeedback = "";
   const fieldIDs = { cloud_url: "cloud-url", models: "model-input", max_concurrency: "concurrency", request_timeout_seconds: "timeout", node_token: "node-token", magpie_key: "magpie-key", magpie_url: "magpie-port", magpie_port: "magpie-port" };
   const text = (key) => messages[language][key] || messages[language].error_generic;
   const fill = (key, params) => Object.entries(params || {}).reduce((s, [k, v]) => s.split("{" + k + "}").join(String(v)), text(key));
+
+  function modelCommand() {
+    const input = byId("magpie-port");
+    const port = input.value;
+    if (input.validity && input.validity.badInput || !window.OctopusOptions.validPort(port)) return "";
+    return "(Invoke-WebRequest -UseBasicParsing 'http://127.0.0.1:" + (port || "3425") + "/v1/models?format=text').Content";
+  }
+
+  function paintCommand() {
+    const command = modelCommand();
+    const input = byId("model-command");
+    if (input.value !== command) commandFeedback = "";
+    input.value = command;
+    input.disabled = !current || current.busy || !current.loaded || Boolean(current.pending);
+    byId("model-command-copy").disabled = copyingCommand || input.disabled;
+    const status = byId("model-command-status");
+    const message = command ? commandFeedback : "commandInvalidPort";
+    status.hidden = !message;
+    status.className = message === "commandInvalidPort" || message === "commandCopyFailed" ? "hint field-error" : "hint";
+    status.textContent = message ? text(message) : "";
+  }
+
+  function copySelectedCommand() {
+    const input = byId("model-command");
+    input.focus();
+    input.select();
+    try { return typeof document.execCommand === "function" && document.execCommand("copy") === true; }
+    catch { return false; }
+  }
+
+  async function copyModelCommand() {
+    if (copyingCommand || !current || current.busy || !current.loaded || current.pending) return;
+    const command = modelCommand();
+    if (!command) { paintCommand(); byId("magpie-port").focus(); return; }
+    // Opaque plugin frames may not expose Clipboard API. Try the user-gesture
+    // copy fallback synchronously when that API is unavailable.
+    const clipboard = window.navigator && window.navigator.clipboard;
+    let copied = false;
+    if (!clipboard || typeof clipboard.writeText !== "function") copied = copySelectedCommand();
+    else {
+      copyingCommand = true;
+      paintCommand();
+      try { await clipboard.writeText(command); copied = true; }
+      catch { if (modelCommand() === command) copied = copySelectedCommand(); }
+      finally { copyingCommand = false; }
+    }
+    if (modelCommand() === command) commandFeedback = copied ? "commandCopied" : "commandCopyFailed";
+    paintCommand();
+  }
 
   function paintChips(state) {
     const wrap = byId("chips");
@@ -203,6 +266,16 @@
     const locked = state.busy || !state.loaded || Boolean(state.pending);
     byId("fields").disabled = locked;
     byId("models-fieldset").disabled = locked;
+    byId("model-import-input").disabled = locked;
+    byId("model-import").disabled = locked;
+    const imported = state.importResult;
+    const importStatus = byId("model-import-status");
+    importStatus.hidden = !imported;
+    importStatus.className = imported && !imported.ok ? "hint field-error" : "hint";
+    importStatus.textContent = !imported ? "" : imported.ok
+      ? fill("importedModels", imported)
+      : fill("importFailed", { reason: text("model_" + imported.reason) });
+    byId("model-import-input").setAttribute("aria-invalid", String(Boolean(imported && !imported.ok)));
     for (const id of ["save", "connect", "disconnect"]) byId(id).disabled = locked;
     byId("retry").hidden = state.loaded || state.busy;
     byId("confirm").disabled = state.busy;
@@ -248,6 +321,7 @@
       paintedSaved = serialized;
     }
     paintChips(state);
+    paintCommand();
   }
 
   function applyTheme(theme) {
@@ -270,85 +344,6 @@
     if (current) paint(current);
   }
 
-  async function fetchModels() {
-    const key = byId("magpie-key").value.trim();
-    const status = byId("model-fetch-status");
-    status.hidden = false;
-    if (!key) {
-      status.textContent = text("fetchModelsNeedKey");
-      byId("magpie-key").focus();
-      return;
-    }
-    const port = byId("magpie-port").value.trim() || "3425";
-    if (!window.OctopusOptions.validPort(port)) {
-      status.textContent = text("fetchModelsNeedValidPort");
-      byId("magpie-port").focus();
-      return;
-    }
-    const button = byId("model-fetch");
-    button.disabled = true;
-    status.textContent = text("fetchingModels");
-    try {
-      const response = await fetch("http://127.0.0.1:" + port + "/v1/models", { headers: { authorization: "Bearer " + key, "x-magpie-agent": "octopus-ly-connector:v" + VERSION } });
-      if (response.status === 401 || response.status === 403) {
-        status.textContent = text("fetchModelsAuth");
-        return;
-      }
-      if (!response.ok) throw new Error("HTTP " + response.status);
-      const body = await response.json();
-      const ids = Array.isArray(body && body.data) ? body.data.map((entry) => entry && entry.id).filter((id) => typeof id === "string" && id) : [];
-      let added = 0;
-      for (const id of ids) if (controller.addModel(id)) added += 1;
-      status.textContent = fill("fetchedModels", { count: added });
-    } catch {
-      status.textContent = text("fetchModelsFailed");
-    } finally {
-      button.disabled = false;
-    }
-  }
-
-  function updateFetchButton() {
-    const locked = current ? current.busy || !current.loaded || Boolean(current.pending) : true;
-    byId("model-fetch").disabled = locked || byId("magpie-key").value.trim() === "";
-  }
-
-  async function fetchModels() {
-    const key = byId("magpie-key").value.trim();
-    const status = byId("model-fetch-status");
-    status.hidden = false;
-    if (!key) {
-      status.textContent = text("fetchModelsNeedKey");
-      byId("magpie-key").focus();
-      return;
-    }
-    const port = byId("magpie-port").value.trim() || "3425";
-    if (!window.OctopusOptions.validPort(port)) {
-      status.textContent = text("fetchModelsNeedValidPort");
-      byId("magpie-port").focus();
-      return;
-    }
-    const button = byId("model-fetch");
-    button.disabled = true;
-    status.textContent = text("fetchingModels");
-    try {
-      const response = await fetch("http://127.0.0.1:" + port + "/v1/models", { headers: { authorization: "Bearer " + key, "x-magpie-agent": "octopus-ly-connector:v" + VERSION } });
-      if (response.status === 401 || response.status === 403) {
-        status.textContent = text("fetchModelsAuth");
-        return;
-      }
-      if (!response.ok) throw new Error("HTTP " + response.status);
-      const body = await response.json();
-      const ids = Array.isArray(body && body.data) ? body.data.map((entry) => entry && entry.id).filter((id) => typeof id === "string" && id) : [];
-      let added = 0;
-      for (const id of ids) if (controller.addModel(id)) added += 1;
-      status.textContent = fill("fetchedModels", { count: added });
-    } catch {
-      status.textContent = text("fetchModelsFailed");
-    } finally {
-      updateFetchButton();
-    }
-  }
-
   const bridge = window.magpie;
   applyTheme(bridge && bridge.theme);
   if (!bridge) {
@@ -356,8 +351,14 @@
     byId("saved-state").textContent = text("noState");
     return;
   }
-  bridge.onTheme(applyTheme);
-  const controller = window.OctopusController.createController({ bridge, onChange: (state) => { paint(state); updateFetchButton(); } });
+  let themeChanged = false;
+  bridge.onTheme(function (theme) { themeChanged = true; applyTheme(theme); });
+  // The initial hello resolves ready without an onTheme event. A later event
+  // wins if it arrives before this promise continuation runs.
+  void Promise.resolve(bridge.ready).then(function (theme) {
+    if (!themeChanged) applyTheme(bridge.theme || theme);
+  }).catch(function () { /* load() reports handshake failures without raw errors. */ });
+  const controller = window.OctopusController.createController({ bridge, onChange: paint });
 
   const fields = () => ({
     cloud_url: byId("cloud-url").value,
@@ -379,9 +380,11 @@
     if (event.key === "Enter") { event.preventDefault(); submitModel(); }
   });
   byId("model-input").addEventListener("input", function () { controller.clearDraftError(); });
-  byId("model-fetch").addEventListener("click", fetchModels);
-  byId("magpie-key").addEventListener("input", updateFetchButton);
-  byId("magpie-port").addEventListener("input", updateFetchButton);
+  byId("model-import").addEventListener("click", function () {
+    controller.importModels(byId("model-import-input").value);
+  });
+  byId("model-command-copy").addEventListener("click", function () { void copyModelCommand(); });
+  byId("magpie-port").addEventListener("input", function () { commandFeedback = ""; paintCommand(); });
 
   for (const action of ["save", "connect", "disconnect"]) {
     byId(action).addEventListener("click", function () {

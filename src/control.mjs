@@ -74,20 +74,62 @@ export function publicOptions(raw = {}) {
   return { ...result.value, models: [...result.value.models].sort() };
 }
 
+// Match Magpie's package-name and Git-spec grammar, never a path disguised by
+// a version suffix. Only npm versions/tags are needed here, not URLs or aliases.
+const packageName = /^(?:@[a-z0-9][a-z0-9._~-]*\/)?[a-z0-9][a-z0-9._~-]*$/;
+const validPackageName = (name) => typeof name === 'string' && packageName.test(name) && !/\s/.test(name);
+const npmSpec = /^((?:@[a-z0-9][a-z0-9._~-]*\/)?[a-z0-9][a-z0-9._~-]*)(?:@[a-zA-Z0-9][a-zA-Z0-9._+-]*)?$/;
+const gitSpec = /^(?:(?:github|gitlab|bitbucket):|git\+[a-z]+:\/\/|git:\/\/)\S+$|^https?:\/\/(?:www\.)?(?:github\.com|gitlab\.com|bitbucket\.org)\/\S+$|^[A-Za-z0-9][A-Za-z0-9_.-]*\/[A-Za-z0-9_.-]+(?:#\S+)?$/;
+
 export async function readControl(directory, { root = pluginRoot, spec } = {}) {
   if (typeof directory !== 'string' || !isAbsolute(directory)) throw invalid();
+  if (spec !== undefined && (typeof spec !== 'string' || !spec)) throw invalid();
   const canonicalRoot = await realpath(root);
   const list = await readJSON(join(directory, 'plugins.json'), 2 << 20);
   if (!record(list) || !Array.isArray(list.plugins)) throw invalid();
+  let dependencies;
+  let ownName;
+  async function installedName(entrySpec) {
+    if (/\s/.test(entrySpec) || /^[.\\/]/.test(entrySpec) || entrySpec.startsWith('file:') || /^[A-Za-z]:[\\/]/.test(entrySpec)) return undefined;
+    if (!gitSpec.test(entrySpec)) return npmSpec.exec(entrySpec)?.[1];
+    if (dependencies === undefined) {
+      const manifest = await readJSON(join(directory, 'plugins', 'package.json'), 2 << 20);
+      if (!record(manifest) || !record(manifest.dependencies)) throw invalid();
+      dependencies = Object.entries(manifest.dependencies);
+      if (dependencies.some(([name, value]) => !validPackageName(name) || typeof value !== 'string')) throw invalid();
+    }
+    const names = dependencies.filter(([, value]) => value === entrySpec).map(([name]) => name);
+    // Magpie's map iteration cannot safely distinguish multiple keys for one
+    // Git spec. Refuse that ambiguity rather than guessing which target it used.
+    if (names.length !== 1) throw invalid();
+    return names[0];
+  }
+  async function isSelf(path) {
+    try { return await realpath(path) === canonicalRoot; }
+    catch (error) {
+      if (error.code === 'ENOENT' || error.code === 'ENOTDIR') return false;
+      throw error;
+    }
+  }
   const matches = [];
   for (const entry of list.plugins) {
     if (!record(entry) || typeof entry.spec !== 'string') throw invalid();
     let matchesSelf = false;
     if (spec !== undefined) {
-      if (typeof spec !== 'string' || !spec) throw invalid();
       matchesSelf = entry.spec === spec;
     } else if (isAbsolute(entry.spec)) {
       try { matchesSelf = await realpath(entry.spec) === canonicalRoot; } catch { /* Not this installed directory. */ }
+    } else {
+      const name = await installedName(entry.spec);
+      if (name && await isSelf(join(directory, 'plugins', 'node_modules', ...name.split('/')))) {
+        if (ownName === undefined) {
+          const manifest = await readJSON(join(canonicalRoot, 'package.json'), 2 << 20);
+          if (!record(manifest) || !validPackageName(manifest.name)) throw invalid();
+          ownName = manifest.name;
+        }
+        if (ownName !== name) throw invalid();
+        matchesSelf = true;
+      }
     }
     if (matchesSelf) matches.push(entry);
   }
