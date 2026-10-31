@@ -1,6 +1,6 @@
 {
   "name": "octopus-to-magpie-connect",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Magpie page plugin: connect a local Magpie gateway to an Octopus cloud node so it can serve Octopus Coding Plan models.",
   "type": "module",
   "main": "index.mjs",
@@ -19,10 +19,15 @@
     "magpie-plugin"
   ],
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lingyuins/octopus-to-magpie-connect.git"
+  },
   "dependencies": {
     "ws": "8.22.0"
   },
   "magpie": {
+    "icon": "https://raw.githubusercontent.com/lingyuins/octopus-to-magpie-connect/master/page/icon.svg",
     "page": {
       "title": "Octopus Connector",
       "titles": {

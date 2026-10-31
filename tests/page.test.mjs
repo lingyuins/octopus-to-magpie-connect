@@ -16,7 +16,8 @@ test('manifest is a publishable in-host plugin with fixed ws and classic page as
   assert.deepEqual(manifest.keywords, ['opencode', 'opencode-plugin', 'octopus', 'magpie-plugin']);
   assert.deepEqual(manifest.files, ['index.mjs', 'src/', 'page/']);
   assert.equal(manifest.magpie.page.file, 'page/index.html');
-  assert.deepEqual(Object.keys(manifest.magpie), ['page']);
+  assert.deepEqual(Object.keys(manifest.magpie), ['icon', 'page']);
+  assert.match(manifest.magpie.icon, /^https:\/\/raw\.githubusercontent\.com\//);
   assert.equal(manifest.main, 'index.mjs');
   assert.equal(manifest.type, 'module');
   assert.match(manifest.dependencies.ws, /^\d+\.\d+\.\d+$/);
