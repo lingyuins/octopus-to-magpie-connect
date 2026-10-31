@@ -9,7 +9,7 @@ const read = (path) => readFile(new URL(path, root), 'utf8');
 test('manifest is a publishable in-host plugin with fixed ws and classic page assets', async () => {
   const manifest = JSON.parse(await read('package.json'));
   assert.equal(manifest.name, 'octopus-to-magpie-connect');
-  assert.equal(manifest.version, '0.1.0');
+  assert.equal(manifest.version, '0.1.1');
   assert.equal(manifest.private, undefined);
   assert.match(manifest.description, /Octopus/);
   assert.equal(manifest.license, 'MIT');
@@ -31,7 +31,7 @@ test('manifest is a publishable in-host plugin with fixed ws and classic page as
 });
 
 test('both guides describe in-host operation, lazy host and reload hazards', async () => {
-  for (const path of ['README.md', 'README_zh.md']) {
+  for (const path of ['README.md', 'README.en.md']) {
     const markdown = await read(path);
     assert.match(markdown, /magpie plugin add octopus-to-magpie-connect\n/);
     assert.match(markdown, /magpie plugin add D:\/CodeWorkspace\/octopus-to-magpie-connect/);
