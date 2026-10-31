@@ -1,0 +1,24 @@
+{
+  "name": "octopus-to-magpie-connect",
+  "version": "0.1.0",
+  "private": true,
+  "description": "In-host Magpie to Octopus connector with a private configuration page",
+  "type": "module",
+  "main": "index.mjs",
+  "scripts": {
+    "test": "node --test tests/*.test.mjs"
+  },
+  "dependencies": {
+    "ws": "8.22.0"
+  },
+  "magpie": {
+    "page": {
+      "title": "Octopus Connector",
+      "titles": {
+        "zh": "Octopus 连接器",
+        "zh-TW": "Octopus 連接器"
+      },
+      "file": "page/index.html"
+    }
+  }
+}

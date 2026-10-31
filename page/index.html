@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Octopus Connector</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="_magpie/bridge.js"></script>
+  <script src="options.js" defer></script>
+  <script src="controller.js" defer></script>
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <main>
+    <header class="head">
+      <div>
+        
+        <h1>Octopus Connector</h1>
+      </div>
+      <span class="badge" id="state-badge" data-state="off" data-i18n="badgeOff">Not requested</span>
+    </header>
+
+    <section class="card setup" id="setup-card" aria-labelledby="setup-title" hidden>
+      <div class="setup-head">
+        <h2 id="setup-title" data-i18n="setupTitle">Complete setup, then restart Magpie</h2>
+        <button id="setup-close" class="setup-close" type="button" data-i18n="setupClose">Got it</button>
+      </div>
+      <ol class="trouble-list" data-i18n-list="setupSteps">
+        <li>Fill in the cloud URL, models, credentials and local port.</li>
+        <li>Click Request connection and confirm the save.</li>
+        <li>Fully quit and restart Magpie. Refreshing this page is not enough.</li>
+        <li>In Octopus → Local nodes, click Test connection.</li>
+      </ol>
+    </section>
+
+    <section class="card status" aria-labelledby="status-title">
+      <div class="status-row">
+        <span class="dot" id="state-dot" aria-hidden="true"></span>
+        <div class="status-text">
+          <div class="title-row">
+            <h2 id="status-title" data-i18n="statusTitle">Connection preference</h2>
+            <span class="info-badge" role="note" tabindex="0" data-i18n-title="statusHelp" title="Check actual state on the cloud Octopus Nodes page.">!</span>
+          </div>
+          <p id="saved-state" class="status-line">Loading…</p>
+          <p class="hint" id="saved-when" hidden></p>
+        </div>
+      </div>
+      <details class="trouble">
+        <summary data-i18n="troubleTitle">Not connecting? Check these</summary>
+        <ol class="trouble-list" data-i18n-list="troubleSteps">
+          <li>Set OCTOPUS_NODE_TOKEN and OCTOPUS_MAGPIE_KEY before starting Magpie.</li>
+          <li>The Bun plugin host starts lazily; open any plugin-using Magpie view once.</li>
+          <li>Saving options reloads the host; give it a few seconds, then recheck the cloud Nodes page.</li>
+        </ol>
+      </details>
+      <p class="notice" id="warning" hidden></p>
+    </section>
+
+    <section class="card" aria-labelledby="models-label">
+      <h2 class="label" id="models-label" data-i18n="modelsLabel">Allowed models</h2>
+      <fieldset id="models-fieldset" disabled>
+        <div class="chips" id="chips" role="list" aria-labelledby="models-label"></div>
+        <p class="hint" id="chips-empty" data-i18n="modelsEmpty">No models yet. Add at least one exact model ID below before connecting.</p>
+        <div class="add-row">
+          <input id="model-input" type="text" autocomplete="off" spellcheck="false" data-i18n-ph="modelPlaceholder" placeholder="provider/exact-model-id" aria-labelledby="models-label" aria-describedby="models-help">
+          <button id="model-add" type="button" data-i18n="addModel">Add</button>
+          <button id="model-fetch" type="button" data-i18n="fetchModels">Fetch models</button>
+        </div>
+        <p class="hint field-error" id="model-error" hidden></p>
+        <p class="hint" id="model-fetch-status" role="status" aria-live="polite" hidden></p>
+        <p class="hint" id="models-help" data-i18n="modelsHelp">Exact, case-sensitive IDs, one per chip. Click a chip to remove it. Wildcards have no special meaning; commas are literal.</p>
+      </fieldset>
+    </section>
+
+    <section class="card" aria-labelledby="settings-title">
+      <h2 id="settings-title" data-i18n="settingsTitle">Connection preferences</h2>
+      <fieldset id="fields" disabled>
+        <legend class="sr-only" data-i18n="settingsTitle">Connection preferences</legend>
+
+        <label for="cloud-url" data-i18n="cloudLabel">Cloud WSS URL</label>
+        <input id="cloud-url" type="text" inputmode="url" autocomplete="off" spellcheck="false" placeholder="wss://octopus.example/prefix/node/v1/connect" aria-describedby="cloud-help">
+        <p class="hint" id="cloud-help" data-i18n="cloudHelp">Use wss://, with an optional deployment prefix and /node/v1/connect. No credentials, query, fragment, encoded paths or dot segments.</p>
+
+        <p class="hint" data-i18n="credentialsHelp">Credentials are saved in plain text in plugins.json on this machine. Leave empty to use the corresponding environment variable.</p>
+
+        <label for="node-token" data-i18n="nodeTokenLabel">Node token</label>
+        <input id="node-token" type="password" autocomplete="off" spellcheck="false" placeholder="oct_node_…">
+
+        <label for="magpie-key" data-i18n="magpieKeyLabel">Magpie API key</label>
+        <input id="magpie-key" type="password" autocomplete="off" spellcheck="false">
+
+        <label for="magpie-port" data-i18n="magpieURLLabel">Magpie port on this machine</label>
+        <input id="magpie-port" type="number" inputmode="numeric" min="1" max="65535" step="1" autocomplete="off" placeholder="3425" aria-describedby="magpie-port-help">
+        <p class="hint" id="magpie-port-help" data-i18n="magpieURLHelp">Enter a port from 1 to 65535, not an address. The host is fixed to 127.0.0.1. Leave empty to use private configuration or default port 3425.</p>
+
+        <div class="columns">
+          <div>
+            <label for="concurrency" data-i18n="concurrencyLabel">Maximum concurrency (1–32)</label>
+            <input id="concurrency" type="number" min="1" max="32" step="1" value="4">
+          </div>
+          <div>
+            <label for="timeout" data-i18n="timeoutLabel">Request timeout in seconds (1–3600)</label>
+            <input id="timeout" type="number" min="1" max="3600" step="1" value="300">
+          </div>
+        </div>
+      </fieldset>
+      <p class="message" id="message" role="status" aria-live="polite">Loading…</p>
+      <ul id="errors" class="errors" role="alert" hidden></ul>
+      <section id="restart-result" class="restart-result" role="status" aria-live="polite" hidden>
+        <h3 data-i18n="restartTitle">Restart Magpie to apply this configuration</h3>
+        <p data-i18n="restartHelp">Fully quit and restart Magpie; refreshing the plugin page is not enough. After restarting, check Octopus → Local nodes and click Test connection.</p>
+      </section>
+      <div class="actions">
+        <button id="save" type="button" disabled data-i18n="save">Save preferences</button>
+        <button id="connect" type="button" class="primary" disabled data-i18n="connect">Request connection</button>
+        <button id="disconnect" type="button" disabled data-i18n="disconnect">Request disconnection</button>
+        <button id="retry" type="button" hidden data-i18n="retry">Retry loading</button>
+      </div>
+      <section class="confirmation" id="confirmation" role="alertdialog" aria-modal="false" aria-labelledby="confirm-title" aria-describedby="confirm-detail" hidden>
+        <h3 id="confirm-title" data-i18n="confirmTitle">Confirm this change</h3>
+        <p id="confirm-detail"></p>
+        <div class="actions">
+          <button id="confirm" type="button" class="primary" data-i18n="confirmButton">Confirm</button>
+          <button id="cancel" type="button" data-i18n="cancel">Cancel</button>
+        </div>
+      </section>
+    </section>
+
+    
+  </main>
+</body>
+</html>
